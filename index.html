@@ -542,6 +542,16 @@
     return String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'character';
   }
 
+  // Strips markdown image tags like ![alt text](url) — including any
+  // bracketed text riding along with them — before anything else touches
+  // the greeting. Also tidies up the blank lines/spaces left behind.
+  function stripImageMarkdown(text){
+    if (!text) return text;
+    let out = String(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+    out = out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+    return out;
+  }
+
   function buildSourceCard(raw){
     const { wrapped, spec } = detectFormat(raw);
     const obj = wrapped ? raw.data : raw;
@@ -567,8 +577,12 @@
     const firstMes = String(obj[firstMesKey] || '');
     const altArrRaw = obj[altKey];
     const altArr = Array.isArray(altArrRaw) ? altArrRaw : [];
-    const greetings = [{ label:'Primary greeting', text: firstMes }]
-      .concat(altArr.map((g,i) => ({ label:`Alternate greeting ${i+1}`, text: String(g || '') })))
+    const greetings = [{ label:'Primary greeting', raw: firstMes }]
+      .concat(altArr.map((g,i) => ({ label:`Alternate greeting ${i+1}`, raw: String(g || '') })))
+      .map(g => {
+        const text = stripImageMarkdown(g.raw);
+        return { label: g.label, text, imageStripped: text.length !== g.raw.trim().length };
+      })
       .filter(g => g.text.trim().length > 0);
 
     if (greetings.length === 0) throw new Error('no non-empty greetings found (first_mes / alternate_greetings)');
@@ -668,10 +682,55 @@
     };
   }
 
+  // Strips code fences, wrapping quotes, and — most importantly — any
+  // preamble/trailing commentary a model adds despite being told not to
+  // (e.g. "Here's your rewritten version under 5000 characters:" or
+  // "Note: I preserved the asterisked actions."). Only ever trims whole
+  // lines at the very start or very end, never touches the middle, so it
+  // can't eat real content.
+  // Lines that open/close with a conversational preamble ("Here's your
+  // rewritten version under 5000 characters:", "Sure, here you go:"...).
+  const META_LINE_RE = /^(here('|’)?s|here is|here you go|sure[,!]?|okay[,!]?|understood|got it|certainly|of course|below is|this is|i('|’)?ve|i have|i'll|note\s*[-—:]?|please note|as requested|as you (asked|requested)|i kept|i preserved|i maintained|i've kept|i've preserved|i've maintained|rewritten (version|text|greeting|personality|scenario|dialogue)|condensed (version|text)|expanded (version|text)|\(?note[:\)])\b.*[:.]?\s*$/i;
+
+  // Lines that echo back the instructions instead of following them
+  // ("You must preserve all asterisked actions ... and any line breaks.").
+  const INSTRUCTION_LINE_RE = /\b(you must|must (preserve|maintain|keep|stay|remain)|please (preserve|maintain|keep)|preserve (all|every)|keep (all|every)|maintain (all|every))\b.{0,100}\b(asterisk|line[- ]?break|format|character)/i;
+
+  // Standalone lines that just state a character budget was hit.
+  const CHARCOUNT_LINE_RE = /\b(under|within|below)\s+[\d,]+\s*characters?\b/i;
+
+  function isMetaLine(line){
+    return META_LINE_RE.test(line) || INSTRUCTION_LINE_RE.test(line) || CHARCOUNT_LINE_RE.test(line);
+  }
+
+  function stripMetaLines(s){
+    const lines = s.split('\n');
+    while (lines.length > 1 && lines[0].trim().length > 0 && lines[0].trim().length < 240 && isMetaLine(lines[0].trim())){
+      lines.shift();
+      while (lines.length && lines[0].trim() === '') lines.shift();
+    }
+    while (lines.length > 1 && lines[lines.length-1].trim().length > 0 && lines[lines.length-1].trim().length < 240 && isMetaLine(lines[lines.length-1].trim())){
+      lines.pop();
+      while (lines.length && lines[lines.length-1].trim() === '') lines.pop();
+    }
+    return lines.join('\n');
+  }
+
+  // Only ever strips backticks as "wrapper" punctuation — never straight or
+  // curly quotes, since a greeting or example dialogue can legitimately
+  // start or end with a real spoken line like `"Come closer."`.
+  function stripWrappingBackticks(s){
+    if (s.length > 1 && s.startsWith('`') && s.endsWith('`')) return s.slice(1, -1).trim();
+    return s;
+  }
+
   function cleanAIText(t){
-    return String(t || '').trim()
-      .replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '')
-      .replace(/^["'`]+|["'`]+$/g, '').trim();
+    let s = String(t || '').trim();
+    s = s.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
+    s = stripWrappingBackticks(s);
+    s = stripMetaLines(s).trim();
+    s = stripWrappingBackticks(s);
+    return s;
   }
 
   async function callAI(systemPrompt, userPrompt, cfg){
@@ -725,14 +784,15 @@
     return cut.trim();
   }
 
-  const SYSTEM_PROMPT = "You are an expert editor for AI-roleplay character sheets. You rewrite fields to fit strict character budgets while preserving voice, tone, key facts, and any formatting such as asterisked actions or line breaks. You respond with ONLY the rewritten text: no preamble, no explanation, no quotation marks, no code fences.";
+  const SYSTEM_PROMPT = "You are a text-rewriting engine embedded in a pipeline. Your entire reply is inserted verbatim into a JSON field with no human reviewing it first, so it must contain ONLY the rewritten text itself and absolutely nothing else. Never include a preamble, title, label, quotation marks, or code fences. Never include commentary before or after the text about what you changed, preserved, condensed, or expanded, and never state a character count — for example, NEVER write things like \"Here's your rewritten version under 5000 characters:\", \"Sure, here you go:\", or \"Note: I preserved the asterisked actions and line breaks.\" Do not explain or summarize your edits anywhere in the reply. The first character of your reply must be the first character of the rewritten content, and the last character of your reply must be the last character of the rewritten content — nothing before, nothing after.";
 
   function buildPrompt(fieldKey, text, limit, action, charName){
     const desc = FIELD_PROMPT_DESC[fieldKey] || fieldKey;
+    const closer = `Output ONLY the rewritten ${desc} — no introduction, no label, no quotation marks, no closing remarks, no note about what you kept or changed. Your reply must contain nothing but the rewritten text itself.`;
     if (action === 'condense'){
-      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information.\n\nRespond with ONLY the rewritten text.\n\n---\n${text}\n---`;
+      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information.\n\n${closer}\n\n---\n${text}\n---`;
     }
-    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total.\n\nRespond with ONLY the rewritten text.\n\n---\n${text}\n---`;
+    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total.\n\n${closer}\n\n---\n${text}\n---`;
   }
 
   async function processField(rawText, fieldKey, label, limit, cfg){
@@ -798,6 +858,7 @@
     for (let i = 0; i < sourceCard.greetings.length; i++){
       setNodeState(i, 'active');
       const g = sourceCard.greetings[i];
+      if (g.imageStripped) log(`${g.label}: removed an inline image tag (and its bracketed text) before processing.`, 'dim');
       const r = await processField(g.text, 'greeting', g.label, LIMITS.greeting, cfg);
       greetingResults.push(r);
       setNodeState(i, r.action === 'failed' ? 'failed' : 'done');
