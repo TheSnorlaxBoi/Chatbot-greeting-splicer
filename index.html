@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPLICE — Greeting Deck Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#14120f;
+    --surface:#1b1815;
+    --surface-2:#211d18;
+    --border:#3a352c;
+    --border-soft:#2a251e;
+    --text:#ece6d8;
+    --text-dim:#a89d87;
+    --text-faint:#6f6656;
+    --amber:#e8a33d;
+    --amber-dim:#7a5a24;
+    --cyan:#4fb5c4;
+    --cyan-dim:#284a4f;
+    --red:#d9634a;
+    --green:#7fae72;
+    --font-display:'IBM Plex Mono', monospace;
+    --font-body:'Inter', sans-serif;
+    --font-mono:'IBM Plex Mono', monospace;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(ellipse 900px 500px at 15% -10%, rgba(232,163,61,0.07), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 10%, rgba(79,181,196,0.06), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--font-body);
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  body::before{
+    content:'';
+    position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px);
+    mix-blend-mode:overlay;
+  }
+  a{color:var(--amber);}
+  .wrap{max-width:920px; margin:0 auto; padding:0 24px 120px; position:relative; z-index:1;}
+
+  /* ---------- Header ---------- */
+  header{padding:64px 0 40px; border-bottom:1px solid var(--border-soft);}
+  .eyebrow{
+    font-family:var(--font-mono); font-size:11px; letter-spacing:0.18em; text-transform:uppercase;
+    color:var(--text-faint); display:flex; align-items:center; gap:10px; margin-bottom:18px;
+  }
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--amber); box-shadow:0 0 8px var(--amber);}
+  h1{
+    font-family:var(--font-display); font-weight:700; font-size:clamp(38px,6vw,64px);
+    letter-spacing:-0.01em; margin:0 0 14px; color:var(--text);
+  }
+  h1 span{color:var(--amber);}
+  .lede{
+    font-size:16px; color:var(--text-dim); max-width:560px; margin:0 0 28px;
+  }
+  .lede b{color:var(--text); font-weight:600;}
+
+  /* signature splice diagram, live header visual */
+  .hero-splice{
+    display:flex; align-items:center; gap:0; margin-top:28px; user-select:none;
+  }
+  .hero-card{
+    font-family:var(--font-mono); font-size:11px; color:var(--text-dim);
+    border:1px solid var(--border); background:var(--surface); border-radius:6px;
+    padding:12px 16px; width:150px; flex-shrink:0;
+  }
+  .hero-card .hc-title{color:var(--text); font-weight:600; font-size:12px; margin-bottom:6px;}
+  .hero-card .hc-bar{height:3px; background:var(--border); border-radius:2px; margin-top:6px; overflow:hidden;}
+  .hero-card .hc-bar i{display:block; height:100%; background:var(--amber); width:70%;}
+  .hero-fork{flex:1; height:90px; position:relative; margin:0 6px;}
+  .hero-fork svg{width:100%; height:100%; display:block;}
+  .hero-fork path{fill:none; stroke:var(--border); stroke-width:1.5;}
+  .hero-fork path.a1{stroke:var(--amber); opacity:0.9;}
+  .hero-fork path.a2{stroke:var(--cyan); opacity:0.7;}
+  .hero-outs{display:flex; flex-direction:column; gap:8px; flex-shrink:0;}
+  .hero-out{
+    font-family:var(--font-mono); font-size:10px; color:var(--text-faint);
+    border:1px solid var(--border-soft); background:var(--surface-2); border-radius:4px;
+    padding:5px 10px; width:104px;
+  }
+
+  /* ---------- Steps ---------- */
+  .step{
+    display:grid; grid-template-columns:52px 1fr; gap:20px;
+    padding:44px 0; border-bottom:1px solid var(--border-soft);
+  }
+  .step-num{
+    font-family:var(--font-mono); font-size:13px; color:var(--text-faint);
+    padding-top:2px;
+  }
+  .step-num b{display:block; font-size:22px; color:var(--border); font-weight:700; line-height:1;}
+  .step.is-done .step-num b{color:var(--green);}
+  .step.is-active .step-num b{color:var(--amber);}
+  .step-head{display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:6px;}
+  .step-title{font-family:var(--font-display); font-size:19px; font-weight:600; color:var(--text);}
+  .step-sub{font-size:13px; color:var(--text-dim); margin-bottom:20px; max-width:520px;}
+  .status-chip{
+    font-family:var(--font-mono); font-size:10px; letter-spacing:0.08em; text-transform:uppercase;
+    padding:3px 9px; border-radius:20px; border:1px solid var(--border); color:var(--text-faint); white-space:nowrap;
+  }
+  .status-chip.ok{color:var(--green); border-color:var(--green);}
+
+  /* ---------- Drop zone ---------- */
+  .dropzone{
+    border:1.5px dashed var(--border); border-radius:10px; padding:36px 24px;
+    text-align:center; cursor:pointer; transition:border-color .15s, background .15s;
+    background:var(--surface);
+  }
+  .dropzone:hover, .dropzone.drag{border-color:var(--amber); background:var(--surface-2);}
+  .dropzone .dz-icon{font-family:var(--font-mono); font-size:26px; color:var(--text-faint); margin-bottom:10px;}
+  .dropzone .dz-text{font-size:14px; color:var(--text-dim);}
+  .dropzone .dz-text b{color:var(--amber); font-weight:600;}
+  .dropzone .dz-hint{font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:6px;}
+  input[type=file]{display:none;}
+
+  .card-summary{
+    margin-top:18px; border:1px solid var(--border-soft); border-radius:8px; overflow:hidden; background:var(--surface);
+  }
+  .cs-head{
+    display:flex; justify-content:space-between; align-items:center; padding:12px 16px;
+    border-bottom:1px solid var(--border-soft); background:var(--surface-2);
+  }
+  .cs-head .cs-name{font-family:var(--font-display); font-weight:600; font-size:14px;}
+  .cs-head .cs-spec{font-family:var(--font-mono); font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.06em;}
+  .field-row{
+    display:grid; grid-template-columns:1fr 90px 90px; gap:10px; align-items:center;
+    padding:10px 16px; border-bottom:1px solid var(--border-soft); font-size:13px;
+  }
+  .field-row:last-child{border-bottom:none;}
+  .field-row .fr-name{color:var(--text-dim);}
+  .field-row .fr-count{font-family:var(--font-mono); font-size:12px; text-align:right;}
+  .field-row .fr-tag{
+    font-family:var(--font-mono); font-size:9px; text-align:center; padding:2px 6px; border-radius:10px;
+    letter-spacing:.05em; text-transform:uppercase;
+  }
+  .fr-tag.condense{color:var(--red); border:1px solid var(--red);}
+  .fr-tag.expand{color:var(--cyan); border:1px solid var(--cyan);}
+  .fr-tag.ok{color:var(--green); border:1px solid var(--green);}
+
+  /* ---------- Form ---------- */
+  .form-grid{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .form-grid.full{grid-template-columns:1fr;}
+  .field{display:flex; flex-direction:column; gap:6px;}
+  .field label{font-family:var(--font-mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-faint);}
+  .field .hint{font-size:11px; color:var(--text-faint); margin-top:2px;}
+  input[type=text], input[type=url], input[type=password], input[type=number], select{
+    background:var(--surface); border:1px solid var(--border); color:var(--text);
+    font-family:var(--font-mono); font-size:13px; padding:10px 12px; border-radius:6px; width:100%;
+    outline:none; transition:border-color .15s;
+  }
+  input:focus, select:focus{border-color:var(--amber);}
+  select{appearance:none; background-image:linear-gradient(45deg, transparent 50%, var(--text-faint) 50%), linear-gradient(135deg, var(--text-faint) 50%, transparent 50%); background-position:calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size:5px 5px, 5px 5px; background-repeat:no-repeat;}
+  .range-row{display:flex; align-items:center; gap:10px;}
+  input[type=range]{flex:1; accent-color:var(--amber);}
+  .range-val{font-family:var(--font-mono); font-size:12px; color:var(--amber); width:34px; text-align:right;}
+
+  .presets{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;}
+  .preset-btn{
+    font-family:var(--font-mono); font-size:11px; padding:6px 12px; border-radius:20px;
+    border:1px solid var(--border); background:transparent; color:var(--text-dim); cursor:pointer;
+    transition:all .15s;
+  }
+  .preset-btn:hover{border-color:var(--amber); color:var(--amber);}
+
+  /* ---------- Logging toggle ---------- */
+  .toggle-row{display:flex; align-items:center; gap:14px; margin-bottom:22px;}
+  .seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden;}
+  .seg button{
+    font-family:var(--font-mono); font-size:12px; padding:9px 18px; background:var(--surface);
+    color:var(--text-dim); border:none; cursor:pointer; letter-spacing:.03em;
+  }
+  .seg button + button{border-left:1px solid var(--border);}
+  .seg button.active{background:var(--amber-dim); color:var(--amber);}
+  .seg-hint{font-size:12px; color:var(--text-faint);}
+
+  /* ---------- Splice diagram (process view) ---------- */
+  .splice-diagram{display:flex; gap:28px; align-items:flex-start; margin:26px 0 30px;}
+  .source-node{
+    font-family:var(--font-mono); border:1px solid var(--border); background:var(--surface);
+    border-radius:8px; padding:16px; width:150px; flex-shrink:0; position:relative;
+  }
+  .source-node .node-label{font-size:9px; letter-spacing:.1em; color:var(--text-faint); text-transform:uppercase;}
+  .source-node .node-name{display:block; margin-top:6px; font-size:13px; color:var(--text); font-weight:600; word-break:break-word;}
+  .output-nodes{position:relative; padding-left:26px; display:flex; flex-direction:column; gap:10px; flex:1;}
+  .output-nodes::before{content:''; position:absolute; left:12px; top:14px; bottom:14px; width:1.5px; background:var(--border);}
+  .output-node{
+    position:relative; font-family:var(--font-mono); font-size:12px; padding:9px 12px;
+    border:1px solid var(--border-soft); background:var(--surface-2); border-radius:6px;
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    color:var(--text-faint); transition:border-color .25s, color .25s, background .25s;
+  }
+  .output-node::before{content:''; position:absolute; left:-14px; top:50%; width:14px; height:1.5px; background:var(--border);}
+  .output-node .on-status{width:7px; height:7px; border-radius:50%; background:var(--border); flex-shrink:0; transition:background .25s, box-shadow .25s;}
+  .output-node.active{color:var(--amber); border-color:var(--amber-dim);}
+  .output-node.active .on-status{background:var(--amber); box-shadow:0 0 6px var(--amber); animation:pulse 1s infinite;}
+  .output-node.done{color:var(--text); border-color:var(--green);}
+  .output-node.done .on-status{background:var(--green);}
+  .output-node.failed{color:var(--red); border-color:var(--red);}
+  .output-node.failed .on-status{background:var(--red);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+  /* ---------- Console log ---------- */
+  .console{
+    background:#0e0d0b; border:1px solid var(--border); border-radius:8px;
+    font-family:var(--font-mono); font-size:12.5px; line-height:1.65;
+    padding:16px 18px; max-height:340px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;
+  }
+  .console:empty::before{content:'— waiting to run —'; color:var(--text-faint);}
+  .log-line{margin:0 0 3px;}
+  .log-line.info{color:var(--text-dim);}
+  .log-line.ok{color:var(--green);}
+  .log-line.warn{color:var(--amber);}
+  .log-line.error{color:var(--red);}
+  .log-line.dim{color:var(--text-faint); font-size:11.5px;}
+
+  /* ---------- Buttons ---------- */
+  .btn{
+    font-family:var(--font-mono); font-size:13px; font-weight:600; letter-spacing:.03em;
+    padding:13px 26px; border-radius:7px; border:1px solid var(--amber); background:var(--amber);
+    color:#1a1409; cursor:pointer; transition:filter .15s, transform .05s;
+  }
+  .btn:hover{filter:brightness(1.08);}
+  .btn:active{transform:translateY(1px);}
+  .btn:disabled{opacity:.4; cursor:not-allowed; filter:none;}
+  .btn.ghost{background:transparent; color:var(--text); border-color:var(--border);}
+  .btn.ghost:hover{border-color:var(--text-dim);}
+  .btn.cyan{background:var(--cyan); border-color:var(--cyan); color:#08191c;}
+
+  /* ---------- Export ---------- */
+  .file-list{border:1px solid var(--border-soft); border-radius:8px; overflow:hidden; margin-bottom:20px;}
+  .file-row{
+    display:grid; grid-template-columns:1fr 100px 100px; gap:10px; align-items:center;
+    padding:10px 16px; border-bottom:1px solid var(--border-soft); font-family:var(--font-mono); font-size:12.5px;
+  }
+  .file-row:last-child{border-bottom:none;}
+  .file-row .fname{color:var(--text);}
+  .file-row .fdelta{color:var(--text-faint); text-align:right;}
+  .file-row .fdelta b{color:var(--cyan);}
+  .empty-export{color:var(--text-faint); font-size:13px; font-family:var(--font-mono);}
+
+  footer{
+    padding:40px 0; text-align:center; font-family:var(--font-mono); font-size:11px; color:var(--text-faint);
+  }
+  footer a{color:var(--text-faint); text-decoration:underline;}
+
+  @media (max-width:640px){
+    .form-grid{grid-template-columns:1fr;}
+    .step{grid-template-columns:32px 1fr; gap:12px;}
+    .hero-splice{display:none;}
+    .field-row{grid-template-columns:1fr 70px 70px;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none !important; transition:none !important;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow"><span class="dot"></span>LOCAL-MODEL CARD TOOL &middot; RUNS ENTIRELY IN YOUR BROWSER</div>
+    <h1>SPLICE<span>.</span></h1>
+    <p class="lede">SpicyChat only reads one greeting. <b>SPLICE</b> takes a character card with alternate greetings, forks it into one standalone card per greeting, and resizes personality, scenario, example dialogue and each greeting to fit inside your limits — condensing what's too long, expanding what's too thin.</p>
+
+    <div class="hero-splice" aria-hidden="true">
+      <div class="hero-card">
+        <div class="hc-title">source.json</div>
+        <div>1 card · N greetings</div>
+        <div class="hc-bar"><i></i></div>
+      </div>
+      <div class="hero-fork">
+        <svg viewBox="0 0 200 90" preserveAspectRatio="none">
+          <path class="a1" d="M0,45 C60,45 60,14 200,14"/>
+          <path d="M0,45 C60,45 60,45 200,45"/>
+          <path class="a2" d="M0,45 C60,45 60,76 200,76"/>
+        </svg>
+      </div>
+      <div class="hero-outs">
+        <div class="hero-out">greeting_1.json</div>
+        <div class="hero-out">greeting_2.json</div>
+        <div class="hero-out">greeting_3.json</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- STEP 1 -->
+  <div class="step" id="step1">
+    <div class="step-num"><b>01</b>LOAD</div>
+    <div>
+      <div class="step-head">
+        <div class="step-title">Load your card</div>
+        <div class="status-chip" id="chip1">Waiting</div>
+      </div>
+      <div class="step-sub">Character Card V2, V3, or a flat V1-style JSON — SPLICE detects the format automatically. Nothing leaves your browser at this step.</div>
+
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload character card JSON">
+        <div class="dz-icon">&#9670;</div>
+        <div class="dz-text"><b>Click to browse</b> or drag a .json file here</div>
+        <div class="dz-hint" id="dzFilename">no file selected</div>
+      </div>
+      <input type="file" id="fileInput" accept="application/json,.json">
+
+      <div class="card-summary" id="cardSummary" style="display:none;">
+        <div class="cs-head">
+          <span class="cs-name" id="csName">—</span>
+          <span class="cs-spec" id="csSpec">—</span>
+        </div>
+        <div id="csFields"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="step" id="step2">
+    <div class="step-num"><b>02</b>CONNECT</div>
+    <div>
+      <div class="step-head">
+        <div class="step-title">Connect a model</div>
+        <div class="status-chip" id="chip2">Not tested</div>
+      </div>
+      <div class="step-sub">Point SPLICE at a KoboldCpp instance (local or Colab-tunneled) or anything exposing an OpenAI-compatible <code>/v1/chat/completions</code> endpoint — text-generation-webui, LM Studio, Ollama, etc. The endpoint must allow browser requests (CORS) from this page.</div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label for="apiType">API type</label>
+          <select id="apiType">
+            <option value="kobold">KoboldCpp — native API</option>
+            <option value="openai">OpenAI-compatible — chat completions</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="endpoint">Endpoint URL</label>
+          <input type="url" id="endpoint" placeholder="https://xxxx.trycloudflare.com" value="http://localhost:5001">
+        </div>
+        <div class="field" id="modelField">
+          <label for="modelName">Model name <span style="opacity:.6">(OpenAI-compatible only)</span></label>
+          <input type="text" id="modelName" placeholder="local-model">
+        </div>
+        <div class="field">
+          <label for="apiKey">API key <span style="opacity:.6">(optional)</span></label>
+          <input type="password" id="apiKey" placeholder="leave blank if not required">
+        </div>
+        <div class="field">
+          <label for="maxTokens">Max response length (tokens)</label>
+          <input type="number" id="maxTokens" value="900" min="100" max="4000" step="50">
+        </div>
+        <div class="field">
+          <label for="temperature">Temperature</label>
+          <div class="range-row">
+            <input type="range" id="temperature" min="0" max="1.5" step="0.05" value="0.7">
+            <span class="range-val" id="temperatureVal">0.70</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="presets">
+        <button class="preset-btn" data-preset="kobold-local">KoboldCpp · localhost</button>
+        <button class="preset-btn" data-preset="oobabooga">text-generation-webui</button>
+        <button class="preset-btn" data-preset="ollama">Ollama</button>
+      </div>
+      <div style="margin-top:16px;">
+        <button class="btn ghost" id="testConnBtn" type="button">Test connection</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="step" id="step3">
+    <div class="step-num"><b>03</b>RUN</div>
+    <div>
+      <div class="step-head">
+        <div class="step-title">Resize &amp; fork</div>
+        <div class="status-chip" id="chip3">Idle</div>
+      </div>
+      <div class="step-sub">Personality, scenario and example dialogue are processed once and shared; each greeting is processed on its own, then combined into its own standalone card.</div>
+
+      <div class="toggle-row">
+        <span class="seg-hint" style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-faint);">Logging</span>
+        <div class="seg" role="group" aria-label="Logging detail">
+          <button type="button" class="active" data-log="simple">Simple</button>
+          <button type="button" data-log="detailed">Detailed</button>
+        </div>
+        <span class="seg-hint" id="logHint">Milestones only.</span>
+      </div>
+
+      <div class="splice-diagram" id="spliceDiagram" style="display:none;">
+        <div class="source-node">
+          <span class="node-label">Shared fields</span>
+          <span class="node-name" id="sharedNodeName">personality · scenario · examples</span>
+        </div>
+        <div class="output-nodes" id="outputNodes"></div>
+      </div>
+
+      <div style="display:flex; gap:12px; margin-bottom:18px;">
+        <button class="btn" id="runBtn" disabled>Run pipeline</button>
+        <button class="btn ghost" id="clearLogBtn" type="button">Clear log</button>
+      </div>
+
+      <div class="console" id="consoleLog"></div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="step" id="step4" style="border-bottom:none;">
+    <div class="step-num"><b>04</b>EXPORT</div>
+    <div>
+      <div class="step-head">
+        <div class="step-title">Download the deck</div>
+        <div class="status-chip" id="chip4">Nothing yet</div>
+      </div>
+      <div class="step-sub">One JSON per greeting, everything else untouched, zipped together.</div>
+
+      <div class="file-list" id="fileList">
+        <div style="padding:16px;" class="empty-export">no output yet — run the pipeline above</div>
+      </div>
+      <button class="btn cyan" id="downloadBtn" disabled>Download ZIP</button>
+    </div>
+  </div>
+
+  <footer>
+    SPLICE runs 100% client-side — your card and your model endpoint never touch a third-party server other than the one you configure. &middot; <a href="#" id="readmeLink">how this works</a>
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const LIMITS = { personality: 5000, scenario: 4000, mes_example: 4000, greeting: 2000 };
+  const FIELD_LABELS = { personality: 'Personality', scenario: 'Scenario', mes_example: 'Example dialogue' };
+  const FIELD_PROMPT_DESC = {
+    personality: 'personality / description section',
+    scenario: 'scenario section',
+    mes_example: 'example dialogue section',
+    greeting: 'opening greeting message'
+  };
+
+  let sourceCard = null; // built by buildSourceCard()
+  let lastZipBlob = null;
+  let logMode = 'simple';
+
+  // ---------------- DOM refs ----------------
+  const $ = (id) => document.getElementById(id);
+  const dropzone = $('dropzone');
+  const fileInput = $('fileInput');
+  const dzFilename = $('dzFilename');
+  const cardSummary = $('cardSummary');
+  const csName = $('csName');
+  const csSpec = $('csSpec');
+  const csFields = $('csFields');
+  const chip1 = $('chip1'), chip2 = $('chip2'), chip3 = $('chip3'), chip4 = $('chip4');
+  const runBtn = $('runBtn');
+  const consoleLog = $('consoleLog');
+  const clearLogBtn = $('clearLogBtn');
+  const spliceDiagram = $('spliceDiagram');
+  const outputNodesEl = $('outputNodes');
+  const fileListEl = $('fileList');
+  const downloadBtn = $('downloadBtn');
+  const temperature = $('temperature');
+  const temperatureVal = $('temperatureVal');
+  const apiType = $('apiType');
+  const modelField = $('modelField');
+  const testConnBtn = $('testConnBtn');
+
+  temperature.addEventListener('input', () => temperatureVal.textContent = parseFloat(temperature.value).toFixed(2));
+  apiType.addEventListener('change', () => { modelField.style.display = apiType.value === 'openai' ? 'flex' : 'none'; });
+
+  document.querySelectorAll('.seg button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.seg button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      logMode = btn.dataset.log;
+      $('logHint').textContent = logMode === 'simple' ? 'Milestones only.' : 'Full prompts, responses and timings.';
+    });
+  });
+
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = btn.dataset.preset;
+      if (p === 'kobold-local') { apiType.value = 'kobold'; $('endpoint').value = 'http://localhost:5001'; }
+      if (p === 'oobabooga') { apiType.value = 'openai'; $('endpoint').value = 'http://localhost:5000'; $('modelName').value = 'local-model'; }
+      if (p === 'ollama') { apiType.value = 'openai'; $('endpoint').value = 'http://localhost:11434'; $('modelName').value = 'llama3'; }
+      apiType.dispatchEvent(new Event('change'));
+    });
+  });
+
+  // ---------------- File loading ----------------
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+  ['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+  dropzone.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+  fileInput.addEventListener('change', (e) => { const f = e.target.files[0]; if (f) handleFile(f); });
+
+  function handleFile(file){
+    dzFilename.textContent = file.name;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let json;
+      try { json = JSON.parse(reader.result); }
+      catch(err){ dzFilename.textContent = `${file.name} — invalid JSON: ${err.message}`; return; }
+      try {
+        sourceCard = buildSourceCard(json);
+      } catch(err){
+        dzFilename.textContent = `${file.name} — couldn't read this as a character card (${err.message})`;
+        return;
+      }
+      renderCardSummary();
+      chip1.textContent = 'Loaded'; chip1.classList.add('ok');
+      runBtn.disabled = false;
+      buildDiagram();
+    };
+    reader.readAsText(file);
+  }
+
+  // ---------------- Card format handling ----------------
+  function detectFormat(json){
+    if (json && typeof json === 'object' && json.data && typeof json.data === 'object'){
+      return { wrapped:true, spec: json.spec || 'wrapped' };
+    }
+    return { wrapped:false, spec:'flat-v1' };
+  }
+
+  function pickKey(obj, candidates){
+    for (const k of candidates) if (obj[k] !== undefined) return k;
+    return candidates[0];
+  }
+
+  function slugify(s){
+    return String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'character';
+  }
+
+  function buildSourceCard(raw){
+    const { wrapped, spec } = detectFormat(raw);
+    const obj = wrapped ? raw.data : raw;
+    if (!obj || typeof obj !== 'object') throw new Error('no character data found');
+
+    const name = obj.name || obj.char_name || 'character';
+
+    let personalityKey = 'personality';
+    let personalityText = obj.personality;
+    if (!personalityText || !String(personalityText).trim()){
+      if (obj.description && String(obj.description).trim()){
+        personalityKey = 'description';
+        personalityText = obj.description;
+      } else {
+        personalityText = obj.personality || '';
+      }
+    }
+
+    const mesExampleKey = pickKey(obj, ['mes_example','example_dialogue','mes_examples']);
+    const firstMesKey = pickKey(obj, ['first_mes','first_message']);
+    const altKey = pickKey(obj, ['alternate_greetings','alt_greetings']);
+
+    const firstMes = String(obj[firstMesKey] || '');
+    const altArrRaw = obj[altKey];
+    const altArr = Array.isArray(altArrRaw) ? altArrRaw : [];
+    const greetings = [{ label:'Primary greeting', text: firstMes }]
+      .concat(altArr.map((g,i) => ({ label:`Alternate greeting ${i+1}`, text: String(g || '') })))
+      .filter(g => g.text.trim().length > 0);
+
+    if (greetings.length === 0) throw new Error('no non-empty greetings found (first_mes / alternate_greetings)');
+
+    return {
+      raw, wrapped, spec, name, slug: slugify(name), greetings,
+      fields: {
+        personality: { key: personalityKey, text: String(personalityText || '') },
+        scenario:    { key: 'scenario',     text: String(obj.scenario || '') },
+        mes_example: { key: mesExampleKey,  text: String(obj[mesExampleKey] || '') },
+        first_mes:   { key: firstMesKey },
+        alt_greetings: { key: altKey }
+      }
+    };
+  }
+
+  function applyField(root, wrapped, key, value){
+    const obj = wrapped ? root.data : root;
+    obj[key] = value;
+  }
+
+  function deepClone(x){ return JSON.parse(JSON.stringify(x)); }
+
+  function statusFor(len, limit){
+    if (len === 0) return { tag:'ok', label:'empty' };
+    if (len > limit) return { tag:'condense', label:'over limit' };
+    if (len < limit * 0.5) return { tag:'expand', label:'under 50%' };
+    return { tag:'ok', label:'in range' };
+  }
+
+  function renderCardSummary(){
+    csName.textContent = sourceCard.name;
+    csSpec.textContent = sourceCard.spec + (sourceCard.wrapped ? '' : ' (flat)');
+    csFields.innerHTML = '';
+
+    const rows = [
+      ['Personality', sourceCard.fields.personality.text.length, LIMITS.personality],
+      ['Scenario', sourceCard.fields.scenario.text.length, LIMITS.scenario],
+      ['Example dialogue', sourceCard.fields.mes_example.text.length, LIMITS.mes_example],
+    ];
+    sourceCard.greetings.forEach(g => rows.push([g.label, g.text.length, LIMITS.greeting]));
+
+    rows.forEach(([label, len, limit]) => {
+      const s = statusFor(len, limit);
+      const row = document.createElement('div');
+      row.className = 'field-row';
+      row.innerHTML = `<span class="fr-name">${label}</span>
+        <span class="fr-count">${len.toLocaleString()} / ${limit.toLocaleString()}</span>
+        <span class="fr-tag ${s.tag}">${s.label}</span>`;
+      csFields.appendChild(row);
+    });
+
+    cardSummary.style.display = 'block';
+  }
+
+  function buildDiagram(){
+    spliceDiagram.style.display = 'flex';
+    outputNodesEl.innerHTML = '';
+    sourceCard.greetings.forEach((g, i) => {
+      const node = document.createElement('div');
+      node.className = 'output-node';
+      node.id = `outnode-${i}`;
+      node.innerHTML = `<span>${g.label}</span><span class="on-status"></span>`;
+      outputNodesEl.appendChild(node);
+    });
+  }
+
+  function setNodeState(i, state){
+    const node = $(`outnode-${i}`);
+    if (!node) return;
+    node.classList.remove('active','done','failed');
+    if (state) node.classList.add(state);
+  }
+
+  // ---------------- Logging ----------------
+  function log(msg, level, opts){
+    level = level || 'info';
+    opts = opts || {};
+    if (opts.detailedOnly && logMode !== 'detailed') return;
+    const line = document.createElement('div');
+    line.className = 'log-line ' + level;
+    line.textContent = msg;
+    consoleLog.appendChild(line);
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+  }
+  clearLogBtn.addEventListener('click', () => { consoleLog.innerHTML = ''; });
+
+  // ---------------- AI calls ----------------
+  function readConfig(){
+    return {
+      apiType: apiType.value,
+      endpoint: $('endpoint').value.trim().replace(/\/$/,''),
+      model: $('modelName').value.trim(),
+      apiKey: $('apiKey').value.trim(),
+      maxTokens: parseInt($('maxTokens').value, 10) || 900,
+      temperature: parseFloat(temperature.value)
+    };
+  }
+
+  function cleanAIText(t){
+    return String(t || '').trim()
+      .replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '')
+      .replace(/^["'`]+|["'`]+$/g, '').trim();
+  }
+
+  async function callAI(systemPrompt, userPrompt, cfg){
+    const start = performance.now();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
+    let text;
+
+    if (cfg.apiType === 'kobold'){
+      const res = await fetch(cfg.endpoint + '/api/v1/generate', {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          prompt: systemPrompt + '\n\n' + userPrompt,
+          max_length: cfg.maxTokens,
+          max_context_length: 8192,
+          temperature: cfg.temperature,
+          top_p: 0.9,
+          rep_pen: 1.1
+        })
+      });
+      if (!res.ok) throw new Error(`KoboldCpp API returned ${res.status}`);
+      const data = await res.json();
+      text = data && data.results && data.results[0] ? data.results[0].text : '';
+    } else {
+      const res = await fetch(cfg.endpoint + '/v1/chat/completions', {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          model: cfg.model || 'local-model',
+          messages: [{ role:'system', content: systemPrompt }, { role:'user', content: userPrompt }],
+          temperature: cfg.temperature,
+          max_tokens: cfg.maxTokens
+        })
+      });
+      if (!res.ok) throw new Error(`OpenAI-compatible API returned ${res.status}`);
+      const data = await res.json();
+      text = data && data.choices && data.choices[0] ? data.choices[0].message.content : '';
+    }
+
+    return { text: cleanAIText(text), elapsedMs: performance.now() - start };
+  }
+
+  function hardTruncate(text, limit){
+    if (text.length <= limit) return text;
+    let cut = text.slice(0, limit);
+    const lastBreak = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.\n'), cut.lastIndexOf('!'), cut.lastIndexOf('?'));
+    if (lastBreak > limit * 0.6) cut = cut.slice(0, lastBreak + 1);
+    else {
+      const lastSpace = cut.lastIndexOf(' ');
+      if (lastSpace > limit * 0.8) cut = cut.slice(0, lastSpace);
+    }
+    return cut.trim();
+  }
+
+  const SYSTEM_PROMPT = "You are an expert editor for AI-roleplay character sheets. You rewrite fields to fit strict character budgets while preserving voice, tone, key facts, and any formatting such as asterisked actions or line breaks. You respond with ONLY the rewritten text: no preamble, no explanation, no quotation marks, no code fences.";
+
+  function buildPrompt(fieldKey, text, limit, action, charName){
+    const desc = FIELD_PROMPT_DESC[fieldKey] || fieldKey;
+    if (action === 'condense'){
+      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information.\n\nRespond with ONLY the rewritten text.\n\n---\n${text}\n---`;
+    }
+    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total.\n\nRespond with ONLY the rewritten text.\n\n---\n${text}\n---`;
+  }
+
+  async function processField(rawText, fieldKey, label, limit, cfg){
+    const len = rawText.length;
+    if (len === 0){
+      log(`${label}: empty — skipped.`, 'dim');
+      return { text: rawText, action:'none' };
+    }
+    let action = 'none';
+    if (len > limit) action = 'condense';
+    else if (len < limit * 0.5) action = 'expand';
+
+    if (action === 'none'){
+      log(`${label}: ${len.toLocaleString()}/${limit.toLocaleString()} chars — within range, left unchanged.`, 'ok');
+      return { text: rawText, action };
+    }
+
+    log(`${label}: ${len.toLocaleString()}/${limit.toLocaleString()} chars — ${action === 'condense' ? 'over limit, condensing…' : 'under 50% of limit, expanding…'}`, 'info');
+    const userPrompt = buildPrompt(fieldKey, rawText, limit, action, sourceCard.name);
+    if (logMode === 'detailed') log('  → prompt sent:\n' + userPrompt, 'dim', { detailedOnly:true });
+
+    try {
+      const { text: aiText, elapsedMs } = await callAI(SYSTEM_PROMPT, userPrompt, cfg);
+      if (logMode === 'detailed') log('  ← raw response:\n' + (aiText || '(empty)'), 'dim', { detailedOnly:true });
+      let finalText = aiText || rawText;
+      let truncated = false;
+      if (finalText.length > limit){
+        finalText = hardTruncate(finalText, limit);
+        truncated = true;
+      }
+      log(`${label}: done in ${(elapsedMs/1000).toFixed(1)}s — ${len.toLocaleString()} → ${finalText.length.toLocaleString()} chars${truncated ? ' (hard-truncated to fit the limit)' : ''}.`, truncated ? 'warn' : 'ok');
+      return { text: finalText, action };
+    } catch(err){
+      const fallback = len > limit ? hardTruncate(rawText, limit) : rawText;
+      log(`${label}: AI call failed — ${err.message}. Falling back to the original text${len > limit ? ', hard-truncated to fit the limit' : ''}.`, 'error');
+      return { text: fallback, action:'failed' };
+    }
+  }
+
+  // ---------------- Pipeline ----------------
+  runBtn.addEventListener('click', runPipeline);
+
+  async function runPipeline(){
+    if (!sourceCard) return;
+    runBtn.disabled = true;
+    chip3.textContent = 'Running'; chip3.classList.remove('ok');
+    log(`Loaded "${sourceCard.name}" — format: ${sourceCard.spec}${sourceCard.wrapped ? '' : ' (flat)'}. ${sourceCard.greetings.length} greeting(s) found.`, 'info');
+
+    const cfg = readConfig();
+    if (!cfg.endpoint){
+      log('No endpoint configured in step 2 — cannot reach a model.', 'error');
+      chip3.textContent = 'Error';
+      runBtn.disabled = false;
+      return;
+    }
+
+    const results = {};
+    for (const key of ['personality','scenario','mes_example']){
+      results[key] = await processField(sourceCard.fields[key].text, key, FIELD_LABELS[key], LIMITS[key], cfg);
+    }
+
+    const greetingResults = [];
+    for (let i = 0; i < sourceCard.greetings.length; i++){
+      setNodeState(i, 'active');
+      const g = sourceCard.greetings[i];
+      const r = await processField(g.text, 'greeting', g.label, LIMITS.greeting, cfg);
+      greetingResults.push(r);
+      setNodeState(i, r.action === 'failed' ? 'failed' : 'done');
+    }
+
+    log(`Building ${greetingResults.length} standalone card(s)…`, 'info');
+    const zip = new JSZip();
+    const fileSummaries = [];
+
+    for (let i = 0; i < greetingResults.length; i++){
+      const clone = deepClone(sourceCard.raw);
+      applyField(clone, sourceCard.wrapped, sourceCard.fields.personality.key, results.personality.text);
+      applyField(clone, sourceCard.wrapped, sourceCard.fields.scenario.key, results.scenario.text);
+      applyField(clone, sourceCard.wrapped, sourceCard.fields.mes_example.key, results.mes_example.text);
+      applyField(clone, sourceCard.wrapped, sourceCard.fields.first_mes.key, greetingResults[i].text);
+      applyField(clone, sourceCard.wrapped, sourceCard.fields.alt_greetings.key, []);
+
+      const suffix = i === 0 ? 'primary' : `alt${i}`;
+      const fname = `${sourceCard.slug}__${suffix}.json`;
+      zip.file(fname, JSON.stringify(clone, null, 2));
+      fileSummaries.push({ fname, before: sourceCard.greetings[i].text.length, after: greetingResults[i].text.length });
+    }
+
+    lastZipBlob = await zip.generateAsync({ type:'blob' });
+    renderFileList(fileSummaries);
+    downloadBtn.disabled = false;
+    chip4.textContent = `${fileSummaries.length} file(s) ready`; chip4.classList.add('ok');
+    chip3.textContent = 'Complete'; chip3.classList.add('ok');
+    log(`Done. ${fileSummaries.length} card(s) zipped and ready to download.`, 'ok');
+    runBtn.disabled = false;
+  }
+
+  function renderFileList(summaries){
+    fileListEl.innerHTML = '';
+    summaries.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'file-row';
+      const delta = s.after - s.before;
+      const deltaStr = delta === 0 ? 'unchanged' : (delta > 0 ? `+${delta}` : `${delta}`);
+      row.innerHTML = `<span class="fname">${s.fname}</span><span class="fdelta">${s.before.toLocaleString()} → <b>${s.after.toLocaleString()}</b></span><span class="fdelta">${deltaStr}</span>`;
+      fileListEl.appendChild(row);
+    });
+  }
+
+  downloadBtn.addEventListener('click', () => {
+    if (!lastZipBlob) return;
+    const url = URL.createObjectURL(lastZipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (sourceCard ? sourceCard.slug : 'splice') + '-greeting-deck.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  });
+
+  // ---------------- Test connection ----------------
+  testConnBtn.addEventListener('click', async () => {
+    const cfg = readConfig();
+    if (!cfg.endpoint){ chip2.textContent = 'No endpoint set'; chip2.classList.remove('ok'); return; }
+    chip2.textContent = 'Testing…'; chip2.classList.remove('ok');
+    try {
+      const { text } = await callAI('You only ever answer with a single word.', 'Reply with exactly: ready', cfg);
+      chip2.textContent = text ? 'Connected' : 'Reached, empty reply';
+      chip2.classList.add('ok');
+      log(`Connection test succeeded. Model replied: "${text.slice(0,60)}"`, 'ok');
+    } catch(err){
+      chip2.textContent = 'Failed';
+      chip2.classList.remove('ok');
+      log(`Connection test failed: ${err.message}. Check the endpoint URL and that CORS is enabled on your server.`, 'error');
+    }
+  });
+
+  $('readmeLink').addEventListener('click', (e) => { e.preventDefault(); alert('See README.md in the repo for full setup and deployment instructions.'); });
+
+})();
+</script>
+</body>
+</html>
