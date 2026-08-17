@@ -910,28 +910,28 @@
     return { text: cleanAIText(text), elapsedMs: performance.now() - start };
   }
 
-  function hardTruncate(text, limit){
-    if (text.length <= limit) return text;
-    let cut = text.slice(0, limit);
-    const lastBreak = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.\n'), cut.lastIndexOf('!'), cut.lastIndexOf('?'));
-    if (lastBreak > limit * 0.6) cut = cut.slice(0, lastBreak + 1);
-    else {
-      const lastSpace = cut.lastIndexOf(' ');
-      if (lastSpace > limit * 0.8) cut = cut.slice(0, lastSpace);
-    }
-    return cut.trim();
-  }
-
   const SYSTEM_PROMPT = "You are a text-rewriting engine embedded in a pipeline. Your entire reply is inserted verbatim into a JSON field with no human reviewing it first, so it must contain ONLY the rewritten text itself and absolutely nothing else. Never include a preamble, title, label, quotation marks, or code fences. Never include commentary before or after the text about what you changed, preserved, condensed, or expanded, and never state a character count — for example, NEVER write things like \"Here's your rewritten version under 5000 characters:\", \"Sure, here you go:\", or \"Note: I preserved the asterisked actions and line breaks.\" Do not explain or summarize your edits anywhere in the reply. The first character of your reply must be the first character of the rewritten content, and the last character of your reply must be the last character of the rewritten content — nothing before, nothing after.";
 
   function buildPrompt(fieldKey, text, limit, action, charName){
     const desc = FIELD_PROMPT_DESC[fieldKey] || fieldKey;
     const closer = `Output ONLY the rewritten ${desc} — no introduction, no label, no quotation marks, no closing remarks, no note about what you kept or changed. Your reply must contain nothing but the rewritten text itself.`;
     if (action === 'condense'){
-      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information.\n\n${closer}\n\n---\n${text}\n---`;
+      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information. The result must read as complete, natural text — never cut off mid-sentence or mid-word.\n\n${closer}\n\n---\n${text}\n---`;
     }
-    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total.\n\n${closer}\n\n---\n${text}\n---`;
+    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total, and must read as complete, natural text.\n\n${closer}\n\n---\n${text}\n---`;
   }
+
+  // Follow-up prompt used when a result still comes back over the limit —
+  // asks the model to shorten it further rather than ever hard-cutting it.
+  function buildShortenPrompt(fieldKey, text, limit, overBy, charName){
+    const desc = FIELD_PROMPT_DESC[fieldKey] || fieldKey;
+    return `Your last rewrite of this ${desc} for "${charName}" is still ${text.length.toLocaleString()} characters — ${overBy.toLocaleString()} characters over the ${limit.toLocaleString()} character limit.\n\nShorten it further. Cut more redundancy, filler, and secondary detail, but keep it coherent and preserve every core personality trait, plot-critical fact, and the original tone and voice. It must read as complete, natural text — never cut off mid-sentence or mid-word. The result MUST be strictly under ${limit.toLocaleString()} characters total.\n\nOutput ONLY the rewritten text — no introduction, no label, no quotation marks, no closing remarks, no note about what you changed.\n\n---\n${text}\n---`;
+  }
+
+  // How many total attempts (initial rewrite + follow-up shortens) we'll
+  // spend trying to fit a field under its limit before giving up and
+  // shipping the shortest natural result we got — never a hard truncation.
+  const MAX_FIT_ATTEMPTS = 4;
 
   async function processField(rawText, fieldKey, label, limit, cfg){
     const len = rawText.length;
@@ -953,20 +953,42 @@
     if (logMode === 'detailed') log('  → prompt sent:\n' + userPrompt, 'dim', { detailedOnly:true });
 
     try {
-      const { text: aiText, elapsedMs } = await callAI(SYSTEM_PROMPT, userPrompt, cfg);
-      if (logMode === 'detailed') log('  ← raw response:\n' + (aiText || '(empty)'), 'dim', { detailedOnly:true });
-      let finalText = aiText || rawText;
-      let truncated = false;
-      if (finalText.length > limit){
-        finalText = hardTruncate(finalText, limit);
-        truncated = true;
+      const first = await callAI(SYSTEM_PROMPT, userPrompt, cfg);
+      if (logMode === 'detailed') log('  ← raw response:\n' + (first.text || '(empty)'), 'dim', { detailedOnly:true });
+
+      let finalText = first.text || rawText;
+      let totalElapsed = first.elapsedMs;
+      let attempts = 1;
+
+      while (finalText.length > limit && attempts < MAX_FIT_ATTEMPTS){
+        attempts++;
+        const over = finalText.length - limit;
+        log(`${label}: still ${finalText.length.toLocaleString()} chars (${over.toLocaleString()} over) — asking the model to shorten further (attempt ${attempts}/${MAX_FIT_ATTEMPTS})…`, 'warn');
+        const shortenPrompt = buildShortenPrompt(fieldKey, finalText, limit, over, sourceCard.name);
+        if (logMode === 'detailed') log('  → prompt sent:\n' + shortenPrompt, 'dim', { detailedOnly:true });
+        try {
+          const retry = await callAI(SYSTEM_PROMPT, shortenPrompt, cfg);
+          totalElapsed += retry.elapsedMs;
+          if (logMode === 'detailed') log('  ← raw response:\n' + (retry.text || '(empty)'), 'dim', { detailedOnly:true });
+          // only adopt the retry if it actually fits, or is at least shorter than what we have
+          if (retry.text && (retry.text.length <= limit || retry.text.length < finalText.length)){
+            finalText = retry.text;
+          }
+        } catch(err){
+          log(`${label}: shorten attempt failed (${err.message}) — keeping the shortest version obtained so far.`, 'error');
+          break;
+        }
       }
-      log(`${label}: done in ${(elapsedMs/1000).toFixed(1)}s — ${len.toLocaleString()} → ${finalText.length.toLocaleString()} chars${truncated ? ' (hard-truncated to fit the limit)' : ''}.`, truncated ? 'warn' : 'ok');
+
+      if (finalText.length > limit){
+        log(`${label}: done in ${(totalElapsed/1000).toFixed(1)}s — ${len.toLocaleString()} → ${finalText.length.toLocaleString()} chars. Still ${(finalText.length - limit).toLocaleString()} over the ${limit.toLocaleString()} limit after ${attempts} attempt(s) — shipped as complete, natural text rather than cut off mid-sentence.`, 'warn');
+      } else {
+        log(`${label}: done in ${(totalElapsed/1000).toFixed(1)}s — ${len.toLocaleString()} → ${finalText.length.toLocaleString()} chars${attempts > 1 ? ` (fit after ${attempts} attempts)` : ''}.`, 'ok');
+      }
       return { text: finalText, action };
     } catch(err){
-      const fallback = len > limit ? hardTruncate(rawText, limit) : rawText;
-      log(`${label}: AI call failed — ${err.message}. Falling back to the original text${len > limit ? ', hard-truncated to fit the limit' : ''}.`, 'error');
-      return { text: fallback, action:'failed' };
+      log(`${label}: AI call failed — ${err.message}. Falling back to the original text${len > limit ? ' (still over the limit — left uncut)' : ''}.`, 'error');
+      return { text: rawText, action:'failed' };
     }
   }
 

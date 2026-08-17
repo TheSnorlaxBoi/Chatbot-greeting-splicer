@@ -36,11 +36,14 @@ model endpoint you configure yourself.
    - If it's **under 50%** of its limit → the model is asked to
      **expand** it with plausible in-character detail.
    - Otherwise it's left untouched.
-   - If the model's response still comes back over the limit, it's
-     hard-truncated at the nearest sentence/word boundary as a
-     safety net (this is logged).
-   - If the API call fails for any reason, that field falls back to
-     its original text (truncated if needed) and the run continues.
+   - If the result still comes back over the limit, SPLICE never cuts
+     it off — it sends the text back to the model up to three more
+     times asking it to shorten further, keeping the shortest natural
+     (never mid-sentence) result at each step. If it still can't get
+     under the limit after all attempts, it ships the shortest version
+     obtained rather than truncating, and logs that clearly.
+   - If the API call fails outright, that field falls back to its
+     original, unmodified text and the run continues.
 4. **Export** — every greeting variant becomes its own standalone card
    (same name, personality, scenario, example dialogue — only the
    greeting differs, and `alternate_greetings` is cleared to `[]`
