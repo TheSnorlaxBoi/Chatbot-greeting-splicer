@@ -134,6 +134,7 @@
   }
   .cs-head .cs-name{font-family:var(--font-display); font-weight:600; font-size:14px;}
   .cs-head .cs-spec{font-family:var(--font-mono); font-size:10px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.06em;}
+  .cs-thumb{width:38px; height:38px; border-radius:6px; object-fit:cover; border:1px solid var(--border); flex-shrink:0;}
   .field-row{
     display:grid; grid-template-columns:1fr 90px 90px; gap:10px; align-items:center;
     padding:10px 16px; border-bottom:1px solid var(--border-soft); font-size:13px;
@@ -276,7 +277,7 @@
 
     <div class="hero-splice" aria-hidden="true">
       <div class="hero-card">
-        <div class="hc-title">source.json</div>
+        <div class="hc-title">source.png</div>
         <div>1 card · N greetings</div>
         <div class="hc-bar"><i></i></div>
       </div>
@@ -288,9 +289,9 @@
         </svg>
       </div>
       <div class="hero-outs">
-        <div class="hero-out">greeting_1.json</div>
-        <div class="hero-out">greeting_2.json</div>
-        <div class="hero-out">greeting_3.json</div>
+        <div class="hero-out">greeting_1.png</div>
+        <div class="hero-out">greeting_2.png</div>
+        <div class="hero-out">greeting_3.png</div>
       </div>
     </div>
   </header>
@@ -303,18 +304,21 @@
         <div class="step-title">Load your card</div>
         <div class="status-chip" id="chip1">Waiting</div>
       </div>
-      <div class="step-sub">Character Card V2, V3, or a flat V1-style JSON — SPLICE detects the format automatically. Nothing leaves your browser at this step.</div>
+      <div class="step-sub">Character Card V2, V3, a flat V1-style JSON, or a PNG character card with the data embedded in it — SPLICE detects the format automatically. If you upload a PNG, that same image is carried through to every output file. Nothing leaves your browser at this step.</div>
 
-      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload character card JSON">
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload character card JSON or PNG">
         <div class="dz-icon">&#9670;</div>
-        <div class="dz-text"><b>Click to browse</b> or drag a .json file here</div>
+        <div class="dz-text"><b>Click to browse</b> or drag a .json or .png card here</div>
         <div class="dz-hint" id="dzFilename">no file selected</div>
       </div>
-      <input type="file" id="fileInput" accept="application/json,.json">
+      <input type="file" id="fileInput" accept="application/json,.json,image/png,.png">
 
       <div class="card-summary" id="cardSummary" style="display:none;">
         <div class="cs-head">
-          <span class="cs-name" id="csName">—</span>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <img id="csThumb" class="cs-thumb" style="display:none;" alt="">
+            <span class="cs-name" id="csName">—</span>
+          </div>
           <span class="cs-spec" id="csSpec">—</span>
         </div>
         <div id="csFields"></div>
@@ -506,17 +510,44 @@
 
   function handleFile(file){
     dzFilename.textContent = file.name;
+    const isPng = /\.png$/i.test(file.name) || file.type === 'image/png';
+
+    if (isPng){
+      const reader = new FileReader();
+      reader.onload = () => {
+        let chunks;
+        try { chunks = parsePNGChunks(reader.result); }
+        catch(err){ dzFilename.textContent = `${file.name} — couldn't read this PNG (${err.message})`; return; }
+
+        const extracted = extractCharaFromPNG(chunks);
+        if (!extracted){
+          dzFilename.textContent = `${file.name} — no embedded character data found (looked for "chara"/"ccv3" tEXt chunks)`;
+          return;
+        }
+        try { sourceCard = buildSourceCard(extracted.json); }
+        catch(err){ dzFilename.textContent = `${file.name} — couldn't read the embedded card (${err.message})`; return; }
+
+        sourceCard.originalFormat = 'png';
+        sourceCard.pngChunks = chunks;
+        try { sourceCard.pngPreviewUrl = URL.createObjectURL(file); }
+        catch(err){ sourceCard.pngPreviewUrl = null; }
+        renderCardSummary();
+        chip1.textContent = 'Loaded'; chip1.classList.add('ok');
+        runBtn.disabled = false;
+        buildDiagram();
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       let json;
       try { json = JSON.parse(reader.result); }
       catch(err){ dzFilename.textContent = `${file.name} — invalid JSON: ${err.message}`; return; }
-      try {
-        sourceCard = buildSourceCard(json);
-      } catch(err){
-        dzFilename.textContent = `${file.name} — couldn't read this as a character card (${err.message})`;
-        return;
-      }
+      try { sourceCard = buildSourceCard(json); }
+      catch(err){ dzFilename.textContent = `${file.name} — couldn't read this as a character card (${err.message})`; return; }
+      sourceCard.originalFormat = 'json';
       renderCardSummary();
       chip1.textContent = 'Loaded'; chip1.classList.add('ok');
       runBtn.disabled = false;
@@ -550,6 +581,105 @@
     let out = String(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '');
     out = out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
     return out;
+  }
+
+  // ---------------- PNG character card support ----------------
+  // Character card PNGs embed the JSON as base64 inside a tEXt chunk
+  // (keyword "chara" for V2, sometimes also "ccv3" for V3). These helpers
+  // read that out on upload and, on export, rebuild a byte-identical PNG
+  // with only that chunk's contents swapped — the image itself is never
+  // touched or re-encoded.
+  function decodeLatin1(bytes){ let s=''; for (let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]); return s; }
+  function encodeLatin1(str){ const b=new Uint8Array(str.length); for(let i=0;i<str.length;i++) b[i]=str.charCodeAt(i)&0xFF; return b; }
+  function b64ToUtf8(b64){ const binary=atob(b64); const bytes=new Uint8Array(binary.length); for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i); return new TextDecoder('utf-8').decode(bytes); }
+  function utf8ToB64(str){ const bytes=new TextEncoder().encode(str); let binary=''; for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]); return btoa(binary); }
+  function concatUint8Arrays(arrays){ let total=0; arrays.forEach(a=>total+=a.length); const result=new Uint8Array(total); let offset=0; arrays.forEach(a=>{result.set(a,offset); offset+=a.length;}); return result; }
+
+  let CRC_TABLE = null;
+  function makeCRCTable(){
+    const table = new Uint32Array(256);
+    for (let n=0;n<256;n++){
+      let c = n;
+      for (let k=0;k<8;k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      table[n] = c >>> 0;
+    }
+    return table;
+  }
+  function crc32(bytes){
+    if (!CRC_TABLE) CRC_TABLE = makeCRCTable();
+    let crc = 0xFFFFFFFF;
+    for (let i=0;i<bytes.length;i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function buildChunk(type, data){
+    const typeBytes = encodeLatin1(type);
+    const lengthBytes = new Uint8Array(4);
+    new DataView(lengthBytes.buffer).setUint32(0, data.length);
+    const crcBytes = new Uint8Array(4);
+    new DataView(crcBytes.buffer).setUint32(0, crc32(concatUint8Arrays([typeBytes, data])));
+    return concatUint8Arrays([lengthBytes, typeBytes, data, crcBytes]);
+  }
+  function buildTextChunk(keyword, textValue){
+    return buildChunk('tEXt', concatUint8Arrays([encodeLatin1(keyword), new Uint8Array([0]), encodeLatin1(textValue)]));
+  }
+  function parsePNGChunks(buffer){
+    const bytes = new Uint8Array(buffer);
+    const sig = [137,80,78,71,13,10,26,10];
+    for (let i=0;i<8;i++) if (bytes[i] !== sig[i]) throw new Error('not a valid PNG file');
+    const view = new DataView(buffer);
+    const chunks = [];
+    let offset = 8;
+    while (offset + 8 <= bytes.length){
+      const length = view.getUint32(offset);
+      const type = decodeLatin1(bytes.slice(offset+4, offset+8));
+      const dataStart = offset + 8;
+      const data = bytes.slice(dataStart, dataStart+length);
+      chunks.push({ type, data });
+      offset = dataStart + length + 4;
+      if (type === 'IEND') break;
+    }
+    return chunks;
+  }
+  function extractCharaFromPNG(chunks){
+    const order = ['chara','ccv3'];
+    for (const key of order){
+      for (const c of chunks){
+        if (c.type !== 'tEXt') continue;
+        const text = decodeLatin1(c.data);
+        const nullIdx = text.indexOf('\u0000');
+        if (nullIdx === -1) continue;
+        const keyword = text.slice(0, nullIdx);
+        if (keyword.toLowerCase() === key){
+          try { return { keyword, json: JSON.parse(b64ToUtf8(text.slice(nullIdx+1))) }; }
+          catch(e){ /* try the next candidate keyword */ }
+        }
+      }
+    }
+    return null;
+  }
+  function rebuildPNG(originalChunks, updatedJsonStr){
+    const preserveKeys = new Set(['chara','ccv3']);
+    const existingKeywords = [];
+    const filtered = [];
+    for (const c of originalChunks){
+      if (c.type === 'tEXt'){
+        const text = decodeLatin1(c.data);
+        const nullIdx = text.indexOf('\u0000');
+        const keyword = nullIdx >= 0 ? text.slice(0, nullIdx) : '';
+        if (preserveKeys.has(keyword.toLowerCase())){ existingKeywords.push(keyword); continue; }
+      }
+      filtered.push(c);
+    }
+    if (existingKeywords.length === 0) existingKeywords.push('chara');
+    const base64Json = utf8ToB64(updatedJsonStr);
+    const newChunks = existingKeywords.map(kw => buildTextChunk(kw, base64Json));
+    const iendIndex = filtered.findIndex(c => c.type === 'IEND');
+    const parts = [new Uint8Array([137,80,78,71,13,10,26,10])];
+    filtered.forEach((c, idx) => {
+      if (idx === iendIndex) newChunks.forEach(nc => parts.push(nc));
+      parts.push(buildChunk(c.type, c.data));
+    });
+    return concatUint8Arrays(parts);
   }
 
   function buildSourceCard(raw){
@@ -615,7 +745,15 @@
 
   function renderCardSummary(){
     csName.textContent = sourceCard.name;
-    csSpec.textContent = sourceCard.spec + (sourceCard.wrapped ? '' : ' (flat)');
+    const csThumb = $('csThumb');
+    if (sourceCard.originalFormat === 'png'){
+      csSpec.textContent = 'PNG card · ' + sourceCard.spec;
+      if (sourceCard.pngPreviewUrl){ csThumb.src = sourceCard.pngPreviewUrl; csThumb.style.display = 'block'; }
+      else { csThumb.style.display = 'none'; }
+    } else {
+      csThumb.style.display = 'none';
+      csSpec.textContent = sourceCard.spec + (sourceCard.wrapped ? '' : ' (flat)');
+    }
     csFields.innerHTML = '';
 
     const rows = [
@@ -865,6 +1003,7 @@
     }
 
     log(`Building ${greetingResults.length} standalone card(s)…`, 'info');
+    if (sourceCard.originalFormat === 'png') log(`Source image will be embedded in every output file.`, 'info');
     const zip = new JSZip();
     const fileSummaries = [];
 
@@ -877,9 +1016,22 @@
       applyField(clone, sourceCard.wrapped, sourceCard.fields.alt_greetings.key, []);
 
       const suffix = i === 0 ? 'primary' : `alt${i}`;
-      const fname = `${sourceCard.slug}__${suffix}.json`;
-      zip.file(fname, JSON.stringify(clone, null, 2));
-      fileSummaries.push({ fname, before: sourceCard.greetings[i].text.length, after: greetingResults[i].text.length });
+      const jsonStr = JSON.stringify(clone, null, sourceCard.originalFormat === 'png' ? undefined : 2);
+      let usedExt = sourceCard.originalFormat === 'png' ? 'png' : 'json';
+
+      if (sourceCard.originalFormat === 'png'){
+        try {
+          const pngBytes = rebuildPNG(sourceCard.pngChunks, jsonStr);
+          zip.file(`${sourceCard.slug}__${suffix}.png`, pngBytes);
+        } catch(err){
+          log(`${sourceCard.greetings[i].label}: couldn't rebuild the PNG (${err.message}) — writing a .json file for this greeting instead.`, 'error');
+          zip.file(`${sourceCard.slug}__${suffix}.json`, jsonStr);
+          usedExt = 'json';
+        }
+      } else {
+        zip.file(`${sourceCard.slug}__${suffix}.json`, jsonStr);
+      }
+      fileSummaries.push({ fname: `${sourceCard.slug}__${suffix}.${usedExt}`, before: sourceCard.greetings[i].text.length, after: greetingResults[i].text.length });
     }
 
     lastZipBlob = await zip.generateAsync({ type:'blob' });

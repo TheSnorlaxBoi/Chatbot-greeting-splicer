@@ -13,11 +13,15 @@ model endpoint you configure yourself.
 
 ## What it does
 
-1. **Load** — parse your uploaded JSON and detect its format
-   (Character Card V2 / V3 `{ spec, data: {...} }` wrapper, or a flat
-   V1-style object). Name, scenario, personality/description,
-   example dialogue, and every greeting are read out and shown with
-   their current character counts.
+1. **Load** — parse your uploaded card and detect its format:
+   Character Card V2 / V3 `{ spec, data: {...} }` JSON, a flat V1-style
+   JSON, or a **PNG character card** (the common "character card" image
+   files used by SillyTavern, Chub, etc., which embed the JSON as
+   base64 inside a `tEXt` chunk keyed `chara` and/or `ccv3`). If you
+   upload a PNG, its image, name, and character count summary are shown
+   immediately, and that exact image is carried through unmodified to
+   every output file — SPLICE only ever touches the embedded JSON, never
+   the pixel data.
 2. **Connect** — point it at a KoboldCpp instance (local or a
    Colab/cloudflared tunnel) or anything exposing an
    OpenAI-compatible `/v1/chat/completions` endpoint
@@ -37,11 +41,13 @@ model endpoint you configure yourself.
      safety net (this is logged).
    - If the API call fails for any reason, that field falls back to
      its original text (truncated if needed) and the run continues.
-4. **Export** — every greeting variant becomes its own JSON file
+4. **Export** — every greeting variant becomes its own standalone card
    (same name, personality, scenario, example dialogue — only the
    greeting differs, and `alternate_greetings` is cleared to `[]`
-   since each file is meant to stand alone). All files are zipped
-   together for download.
+   since each file is meant to stand alone). If you uploaded a PNG,
+   each output is a PNG with the same image and an updated embedded
+   JSON chunk; otherwise each output is a `.json` file. All files are
+   zipped together for download.
 
 Character limits used (including spaces and line breaks):
 
@@ -99,6 +105,17 @@ a network error even though the server is reachable in another tab.
 - **Detailed** — everything Simple shows, plus the exact prompt sent
   to the model and its raw response for every field, and per-call
   timing.
+
+## Notes on PNG cards
+
+- SPLICE looks for a `tEXt` chunk keyed `chara` (V2) or `ccv3` (V3);
+  if both are present on upload, both are rewritten on export.
+- Only that chunk's bytes are replaced — `IHDR`, `IDAT`/image data,
+  and any other chunks are copied through byte-for-byte, so the image
+  itself is never re-encoded or altered.
+- `zTXt` (compressed text) chara chunks aren't currently read — if
+  your card uses one and SPLICE reports no embedded data found, re-export
+  it as a standard (uncompressed `tEXt`) character card PNG first.
 
 ## Notes on format compatibility
 
