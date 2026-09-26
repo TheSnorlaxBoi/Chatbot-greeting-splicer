@@ -910,15 +910,18 @@
     return { text: cleanAIText(text), elapsedMs: performance.now() - start };
   }
 
-  const SYSTEM_PROMPT = "You are a text-rewriting engine embedded in a pipeline. Your entire reply is inserted verbatim into a JSON field with no human reviewing it first, so it must contain ONLY the rewritten text itself and absolutely nothing else. Never include a preamble, title, label, quotation marks, or code fences. Never include commentary before or after the text about what you changed, preserved, condensed, or expanded, and never state a character count — for example, NEVER write things like \"Here's your rewritten version under 5000 characters:\", \"Sure, here you go:\", or \"Note: I preserved the asterisked actions and line breaks.\" Do not explain or summarize your edits anywhere in the reply. The first character of your reply must be the first character of the rewritten content, and the last character of your reply must be the last character of the rewritten content — nothing before, nothing after.";
+  const SYSTEM_PROMPT = "You are a text-rewriting engine embedded in a pipeline. This is a mechanical text-editing task — you are never roleplaying, chatting, or speaking as any character, even when the text you're editing is a greeting, a line of dialogue, or written in first person. Treat every input purely as a string of characters to shorten or expand on request, the same way you'd edit a paragraph in a document; do not resist, soften, or refuse edits to it because it reads like a character's own words. Your entire reply is inserted verbatim into a JSON field with no human reviewing it first, so it must contain ONLY the rewritten text itself and absolutely nothing else. Never include a preamble, title, label, quotation marks, or code fences. Never include commentary before or after the text about what you changed, preserved, condensed, or expanded, and never state a character count — for example, NEVER write things like \"Here's your rewritten version under 5000 characters:\", \"Sure, here you go:\", or \"Note: I preserved the asterisked actions and line breaks.\" Do not explain or summarize your edits anywhere in the reply. The first character of your reply must be the first character of the rewritten content, and the last character of your reply must be the last character of the rewritten content — nothing before, nothing after.";
 
   function buildPrompt(fieldKey, text, limit, action, charName){
     const desc = FIELD_PROMPT_DESC[fieldKey] || fieldKey;
+    const editNote = fieldKey === 'greeting'
+      ? ` You are editing stored text, not writing or performing a new greeting — do not add anything beyond a genuine rewrite of what's given.`
+      : '';
     const closer = `Output ONLY the rewritten ${desc} — no introduction, no label, no quotation marks, no closing remarks, no note about what you kept or changed. Your reply must contain nothing but the rewritten text itself.`;
     if (action === 'condense'){
-      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information. The result must read as complete, natural text — never cut off mid-sentence or mid-word.\n\n${closer}\n\n---\n${text}\n---`;
+      return `Rewrite the following ${desc} for the character "${charName}" so the result is strictly under ${limit} characters total (counting spaces and line breaks). It is currently ${text.length} characters.${editNote}\n\nCondense it: cut redundancy, filler, and less essential detail, while keeping every core personality trait, plot-critical fact, and the original tone, voice and formatting. Do not invent new information. The result must read as complete, natural text — never cut off mid-sentence or mid-word.\n\n${closer}\n\n---\n${text}\n---`;
     }
-    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total, and must read as complete, natural text.\n\n${closer}\n\n---\n${text}\n---`;
+    return `Expand the following ${desc} for the character "${charName}". It is currently only ${text.length} characters, well under the ${limit} character budget.${editNote}\n\nAdd plausible, in-character detail and flavor consistent with what's already there (traits, speech patterns, backstory hints, sensory detail), without contradicting anything or inventing major new plot facts. Keep the original tone, voice and formatting. The result MUST stay strictly under ${limit} characters total, and must read as complete, natural text.\n\n${closer}\n\n---\n${text}\n---`;
   }
 
   // Follow-up prompt used when a result still comes back over the limit —
@@ -928,10 +931,28 @@
     return `Your last rewrite of this ${desc} for "${charName}" is still ${text.length.toLocaleString()} characters — ${overBy.toLocaleString()} characters over the ${limit.toLocaleString()} character limit.\n\nShorten it further. Cut more redundancy, filler, and secondary detail, but keep it coherent and preserve every core personality trait, plot-critical fact, and the original tone and voice. It must read as complete, natural text — never cut off mid-sentence or mid-word. The result MUST be strictly under ${limit.toLocaleString()} characters total.\n\nOutput ONLY the rewritten text — no introduction, no label, no quotation marks, no closing remarks, no note about what you changed.\n\n---\n${text}\n---`;
   }
 
+  // Used once a shorten attempt has made little or no progress — some
+  // models, especially small local roleplay-tuned ones, resist editing a
+  // greeting because it reads like the character's own words rather than
+  // "content", and just echo it back nearly unchanged. This prompt is much
+  // more explicit that it's a mechanical edit, not a performance, and
+  // demands a real, substantial cut rather than a synonym swap.
+  function buildForcefulShortenPrompt(fieldKey, text, limit, overBy, charName){
+    const desc = FIELD_PROMPT_DESC[fieldKey] || fieldKey;
+    return `This is a plain text-editing task. You are NOT "${charName}", you are not roleplaying, and you are not writing dialogue — you are cutting down a stored string of text to fit inside a hard character limit, exactly as a text editor would.\n\nYour previous attempt barely changed the length of this ${desc}. It is still ${text.length.toLocaleString()} characters — ${overBy.toLocaleString()} over the ${limit.toLocaleString()} character limit. Cut it much more aggressively this time: remove entire sentences or clauses rather than swapping in shorter words. Prioritize fitting the limit over completeness. Keep the core meaning intact and make sure the result reads as complete, natural text — never cut off mid-sentence or mid-word.\n\nOutput ONLY the rewritten text — no introduction, no label, no quotation marks, no closing remarks, no note about what you changed, and no refusal.\n\n---\n${text}\n---`;
+  }
+
+  // True when a rewrite barely shortened the text — a sign the model is
+  // resisting the edit rather than genuinely condensing it.
+  function madeLittleProgress(newLen, oldLen){
+    if (newLen >= oldLen) return true;
+    return (oldLen - newLen) < Math.max(20, oldLen * 0.03);
+  }
+
   // How many total attempts (initial rewrite + follow-up shortens) we'll
   // spend trying to fit a field under its limit before giving up and
   // shipping the shortest natural result we got — never a hard truncation.
-  const MAX_FIT_ATTEMPTS = 4;
+  const MAX_FIT_ATTEMPTS = 5;
 
   async function processField(rawText, fieldKey, label, limit, cfg){
     const len = rawText.length;
@@ -959,12 +980,18 @@
       let finalText = first.text || rawText;
       let totalElapsed = first.elapsedMs;
       let attempts = 1;
+      let stuckStreak = (action === 'condense' && madeLittleProgress(finalText.length, len)) ? 1 : 0;
+      if (stuckStreak) log(`${label}: that rewrite barely changed the length (${len.toLocaleString()} → ${finalText.length.toLocaleString()}) — the model may be resisting the edit.`, 'warn');
 
       while (finalText.length > limit && attempts < MAX_FIT_ATTEMPTS){
         attempts++;
         const over = finalText.length - limit;
-        log(`${label}: still ${finalText.length.toLocaleString()} chars (${over.toLocaleString()} over) — asking the model to shorten further (attempt ${attempts}/${MAX_FIT_ATTEMPTS})…`, 'warn');
-        const shortenPrompt = buildShortenPrompt(fieldKey, finalText, limit, over, sourceCard.name);
+        const beforeLen = finalText.length;
+        const forceful = stuckStreak >= 1;
+        log(`${label}: still ${finalText.length.toLocaleString()} chars (${over.toLocaleString()} over) — asking the model to shorten further (attempt ${attempts}/${MAX_FIT_ATTEMPTS})${forceful ? ', more forcefully this time' : ''}…`, 'warn');
+        const shortenPrompt = forceful
+          ? buildForcefulShortenPrompt(fieldKey, finalText, limit, over, sourceCard.name)
+          : buildShortenPrompt(fieldKey, finalText, limit, over, sourceCard.name);
         if (logMode === 'detailed') log('  → prompt sent:\n' + shortenPrompt, 'dim', { detailedOnly:true });
         try {
           const retry = await callAI(SYSTEM_PROMPT, shortenPrompt, cfg);
@@ -973,6 +1000,12 @@
           // only adopt the retry if it actually fits, or is at least shorter than what we have
           if (retry.text && (retry.text.length <= limit || retry.text.length < finalText.length)){
             finalText = retry.text;
+          }
+          if (madeLittleProgress(finalText.length, beforeLen)){
+            stuckStreak++;
+            log(`${label}: that attempt barely changed the length (${beforeLen.toLocaleString()} → ${finalText.length.toLocaleString()}) — escalating.`, 'warn');
+          } else {
+            stuckStreak = 0;
           }
         } catch(err){
           log(`${label}: shorten attempt failed (${err.message}) — keeping the shortest version obtained so far.`, 'error');
